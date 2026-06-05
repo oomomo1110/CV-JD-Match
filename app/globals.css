@@ -4,6 +4,7 @@
 
 :root {
   color-scheme: light;
+  scroll-behavior: smooth;
 }
 
 * {
@@ -12,11 +13,17 @@
 
 body {
   margin: 0;
-  background: #f7f8fb;
+  background: #f5f8ff;
   color: #18212f;
+  font-family:
+    Arial,
+    "Microsoft YaHei",
+    "PingFang SC",
+    sans-serif;
 }
 
 textarea,
-button {
+button,
+input {
   font: inherit;
 }

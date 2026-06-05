@@ -9,14 +9,22 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        ink: "#18212f",
-        muted: "#5b6472",
-        line: "#d9dee7",
-        paper: "#f7f8fb",
-        brand: "#1f7a68"
+        ink: "#14213d",
+        muted: "#627089",
+        line: "#dde5f3",
+        paper: "#f6f9ff",
+        brand: "#19a889",
+        coral: "#ff6f61",
+        sky: "#2f80ed",
+        violet: "#7c5cff",
+        lemon: "#ffe680",
+        mint: "#d9fff3",
+        app: "#f5f8ff"
       },
       boxShadow: {
-        soft: "0 16px 40px rgba(24, 33, 47, 0.08)"
+        soft: "0 16px 40px rgba(24, 33, 47, 0.08)",
+        pop: "0 18px 45px rgba(47, 128, 237, 0.12)",
+        button: "0 10px 22px rgba(20, 33, 61, 0.18)"
       }
     }
   },
