@@ -1,528 +1,248 @@
-"use client";
-
-import Link from "next/link";
-import { ChangeEvent, FormEvent, useMemo, useState } from "react";
-import type { ChatMessage, OptimizationResult } from "@/types/optimization";
-
-type UploadedResume = {
-  fileName: string;
-  text: string;
-};
-
-const resumePlaceholder = `示例：
-华南某大学 计算机科学与技术 本科
-
-- 参与校园二手交易小程序项目，负责前端页面开发和接口联调
-- 在学生会新媒体部门负责活动推文排版和数据复盘
-- 参加数据分析课程项目，分析用户消费数据并完成展示`;
-
-const jdPlaceholder = `示例：
-产品/运营实习生
-
-岗位职责：
-1. 协助完成用户调研、竞品分析和需求整理；
-2. 跟进产品功能上线后的数据表现，输出复盘结论；
-3. 与研发、设计、运营团队沟通协作，推动项目落地。
-
-岗位要求：
-熟悉互联网产品，具备数据分析意识，沟通清晰，有校园项目或实习经历优先。`;
+import WorkspaceClient from "./WorkspaceClient";
 
 export default function WorkspacePage() {
-  const [resumeText, setResumeText] = useState("");
-  const [uploadedResume, setUploadedResume] = useState<UploadedResume | null>(null);
-  const [jdText, setJdText] = useState("");
-  const [result, setResult] = useState<OptimizationResult | null>(null);
-  const [error, setError] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [isExtracting, setIsExtracting] = useState(false);
-
-  const resumeTextForSubmit = useMemo(() => {
-    return [uploadedResume?.text, resumeText.trim()].filter(Boolean).join("\n\n补充说明：\n");
-  }, [resumeText, uploadedResume]);
-
-  const canSubmit = useMemo(
-    () => resumeTextForSubmit.length > 0 && jdText.trim().length > 0 && !isLoading && !isExtracting,
-    [resumeTextForSubmit, jdText, isLoading, isExtracting]
+  return (
+    <>
+      <WorkspaceClient />
+      <WorkspaceFallbackScript />
+    </>
   );
+}
 
-  async function handleResumeFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = "";
+function WorkspaceFallbackScript() {
+  return (
+    <script
+      dangerouslySetInnerHTML={{
+        __html: String.raw`
+(function () {
+  if (window.__cvJdFallbackBound) {
+    return;
+  }
+  window.__cvJdFallbackBound = true;
 
-    if (!file) {
+  function escapeHtml(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function bindWorkspace() {
+    var form = document.querySelector("[data-cv-form]");
+    var fileInput = document.querySelector("[data-resume-file-input]");
+    var resumeTextarea = document.querySelector("[data-resume-textarea]");
+    var jdTextarea = document.querySelector("[data-jd-textarea]");
+    var selectedFile = document.querySelector("[data-selected-file]");
+    var uploadStatus = document.querySelector("[data-upload-status]");
+    var errorBox = document.querySelector("[data-error-box]");
+    var resultRoot = document.querySelector("[data-result-root]");
+    var submitButton = form ? form.querySelector("button[type='submit']") : null;
+
+    if (!form || !fileInput || !resumeTextarea || !jdTextarea || !submitButton || !resultRoot) {
+      window.setTimeout(bindWorkspace, 300);
       return;
     }
 
-    setError("");
-    setUploadedResume(null);
-    setIsExtracting(true);
+    function setError(message) {
+      if (!errorBox) {
+        return;
+      }
+      if (!message) {
+        errorBox.textContent = "";
+        errorBox.classList.add("hidden");
+        return;
+      }
+      errorBox.textContent = message;
+      errorBox.classList.remove("hidden");
+    }
 
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
+    function setUploadStatus(type, message) {
+      if (!uploadStatus) {
+        return;
+      }
+      if (!message) {
+        uploadStatus.textContent = "";
+        uploadStatus.className = "hidden rounded-lg border px-3 py-2 text-sm leading-6";
+        return;
+      }
+      var colorClass =
+        type === "success"
+          ? "border-[#b8eadf] bg-[#f0fffb] text-[#086b5c]"
+          : type === "error"
+            ? "border-red-200 bg-red-50 text-red-700"
+            : "border-coral/30 bg-white text-coral";
+      uploadStatus.className = "rounded-lg border px-3 py-2 text-sm leading-6 " + colorClass;
+      uploadStatus.textContent = message;
+    }
 
-      const response = await fetch("/api/extract-resume", {
-        method: "POST",
-        body: formData
-      });
-      const data = await response.json();
+    function updateSubmitState() {
+      var hasResume = resumeTextarea.value.trim().length > 0;
+      var hasJd = jdTextarea.value.trim().length > 0;
+      var ready = hasResume && hasJd;
+      submitButton.setAttribute("aria-disabled", String(!ready));
+      submitButton.className =
+        "h-12 rounded-lg px-6 text-sm font-bold text-white shadow-button transition hover:-translate-y-0.5 disabled:translate-y-0 disabled:cursor-not-allowed disabled:bg-slate-300 " +
+        (ready ? "bg-ink hover:bg-[#0f172a]" : "bg-slate-400 hover:bg-slate-500");
+    }
 
-      if (!response.ok) {
-        throw new Error(data.error ?? "文件解析失败，请换一个文件重试。");
+    function renderList(title, items, dotClass) {
+      var safeItems = Array.isArray(items) && items.length ? items : ["暂无明确结果。"];
+      return (
+        '<section class="rounded-lg border border-white bg-white p-4 shadow-pop">' +
+        '<h2 class="text-base font-black text-ink">' + escapeHtml(title) + "</h2>" +
+        '<ul class="mt-3 space-y-2 text-sm leading-6 text-muted">' +
+        safeItems
+          .map(function (item) {
+            return '<li class="flex gap-2"><span class="mt-2 h-2 w-2 flex-none rounded-full ' + dotClass + '"></span><span>' + escapeHtml(item) + "</span></li>";
+          })
+          .join("") +
+        "</ul></section>"
+      );
+    }
+
+    function renderResult(result) {
+      var bullets = Array.isArray(result.revised_bullets) ? result.revised_bullets : [];
+      var rows = bullets.length
+        ? bullets
+            .map(function (bullet) {
+              return (
+                "<tr class=\"align-top\">" +
+                '<td class="border-b border-line px-4 py-4 leading-6 text-ink">' + escapeHtml(bullet.original) + "</td>" +
+                '<td class="border-b border-line px-4 py-4 leading-6 text-ink">' + escapeHtml(bullet.revised) + "</td>" +
+                '<td class="border-b border-line px-4 py-4 leading-6 text-muted">' + escapeHtml(bullet.reason) + "</td>" +
+                '<td class="border-b border-line px-4 py-4"><span class="rounded-full px-3 py-1 text-xs font-bold ' +
+                (bullet.needs_user_confirmation ? "bg-lemon text-[#775e00]" : "bg-mint text-[#086b5c]") +
+                '">' +
+                (bullet.needs_user_confirmation ? "需要" : "已足够") +
+                "</span></td></tr>"
+              );
+            })
+            .join("")
+        : '<tr><td colspan="4" class="border-b border-line px-4 py-4 text-sm leading-6 text-muted">当前 mock 逻辑没有识别到可改写的经历 bullet，请补充项目/实习/校园经历后重试。</td></tr>';
+
+      resultRoot.innerHTML =
+        '<div class="space-y-5">' +
+        '<div class="grid gap-4 lg:grid-cols-3">' +
+        renderList("JD 关键词", result.jd_keywords, "bg-sky") +
+        renderList("匹配点", result.matched_points, "bg-[#13b99a]") +
+        renderList("待补强", result.missing_points, "bg-[#f5c542]") +
+        "</div>" +
+        '<section class="overflow-hidden rounded-lg border border-white bg-white shadow-pop">' +
+        '<div class="flex flex-col gap-2 border-b border-line px-4 py-4 sm:flex-row sm:items-center sm:justify-between">' +
+        '<div><h2 class="text-lg font-black text-ink">项目经历优化对比</h2><p class="mt-1 text-sm text-muted">只展示项目、竞赛、校园实践等经历 bullet，不处理个人信息和教育背景。</p></div>' +
+        '<span class="rounded-full bg-violet/10 px-3 py-1 text-xs font-bold text-violet">' + bullets.length + " 条建议</span>" +
+        "</div>" +
+        '<div class="overflow-x-auto"><table class="w-full min-w-[900px] border-collapse text-left text-sm">' +
+        '<thead class="bg-[#f8fbff] text-muted"><tr><th class="w-[26%] border-b border-line px-4 py-3 font-bold">原始 bullet</th><th class="w-[32%] border-b border-line px-4 py-3 font-bold">优化后 bullet</th><th class="w-[28%] border-b border-line px-4 py-3 font-bold">修改原因</th><th class="w-[14%] border-b border-line px-4 py-3 font-bold">需确认</th></tr></thead>' +
+        "<tbody>" + rows + "</tbody></table></div></section>" +
+        '<section class="rounded-lg border border-white bg-white p-4 shadow-pop"><h2 class="text-lg font-black text-ink">追问补充对话</h2>' +
+        '<div class="mt-4 rounded-lg border border-line bg-[#f8fbff] p-3 text-sm leading-6 text-ink">' +
+        escapeHtml((result.follow_up_questions || [])[0] || "请继续补充项目职责、行动过程和结果数据。") +
+        "</div></section></div>";
+    }
+
+    async function extractFile(file) {
+      if (!file) {
+        return;
       }
 
-      setUploadedResume({
-        fileName: data.fileName,
-        text: data.text
-      });
-    } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : "文件解析失败，请换一个文件重试。");
-    } finally {
-      setIsExtracting(false);
-    }
-  }
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError("");
-    setResult(null);
-    setIsLoading(true);
-
-    try {
-      const response = await fetch("/api/optimize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resumeText: resumeTextForSubmit, jdText })
-      });
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error ?? "请求失败，请稍后重试。");
+      var lowerName = file.name.toLowerCase();
+      if (selectedFile) {
+        selectedFile.textContent = "已选择：" + file.name;
       }
 
-      setResult(data as OptimizationResult);
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "请求失败，请稍后重试。");
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  return (
-    <main className="min-h-screen bg-app text-ink">
-      <header className="border-b border-white/70 bg-white/85">
-        <div className="mx-auto flex max-w-6xl flex-col gap-3 px-5 py-5 sm:px-8 md:flex-row md:items-center md:justify-between">
-          <div>
-            <Link href="/" className="text-sm font-bold text-sky transition hover:text-violet">
-              返回封面
-            </Link>
-            <h1 className="mt-2 text-2xl font-black text-ink">简历优化工作台</h1>
-            <p className="mt-1 text-sm leading-6 text-muted">
-              上传简历、粘贴 JD，先验证完整产品闭环；真实改写质量等接入大模型后再评估。
-            </p>
-          </div>
-          <span className="rounded-full bg-lemon px-3 py-1 text-xs font-bold text-[#775e00]">
-            JD 定向优化模式
-          </span>
-        </div>
-      </header>
-
-      <form onSubmit={handleSubmit} className="mx-auto grid max-w-6xl gap-5 px-5 py-6 sm:px-8 lg:grid-cols-2">
-        <ResumeInputPanel
-          value={resumeText}
-          uploadedResume={uploadedResume}
-          isExtracting={isExtracting}
-          onTextChange={setResumeText}
-          onFileChange={handleResumeFileChange}
-          onRemoveFile={() => setUploadedResume(null)}
-        />
-        <TextInputPanel
-          label="目标岗位 JD"
-          description="粘贴岗位职责和要求。系统会围绕 JD 做匹配和结构化优化建议。"
-          value={jdText}
-          onChange={setJdText}
-          placeholder={jdPlaceholder}
-        />
-
-        <div className="flex flex-col gap-4 lg:col-span-2">
-          {error ? (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm leading-6 text-red-700">
-              {error}
-            </div>
-          ) : null}
-
-          <div className="flex flex-col gap-3 rounded-lg border border-white bg-white/80 p-4 shadow-soft sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm leading-6 text-muted">
-              当前结果来自 mock 逻辑，适合验证流程；接入真实 AI 后再评估优化质量。
-            </p>
-            <button
-              type="submit"
-              disabled={!canSubmit}
-              className="h-12 rounded-lg bg-ink px-6 text-sm font-bold text-white shadow-button transition hover:-translate-y-0.5 hover:bg-[#0f172a] disabled:translate-y-0 disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              {isLoading ? "正在优化..." : "开始优化"}
-            </button>
-          </div>
-        </div>
-      </form>
-
-      <section className="mx-auto max-w-6xl px-5 pb-10 sm:px-8">
-        {result ? <ResultView result={result} /> : <EmptyResult />}
-      </section>
-    </main>
-  );
-}
-
-function ResumeInputPanel({
-  value,
-  uploadedResume,
-  isExtracting,
-  onTextChange,
-  onFileChange,
-  onRemoveFile
-}: {
-  value: string;
-  uploadedResume: UploadedResume | null;
-  isExtracting: boolean;
-  onTextChange: (value: string) => void;
-  onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
-  onRemoveFile: () => void;
-}) {
-  return (
-    <section className="rounded-lg border border-white bg-white p-4 shadow-pop">
-      <PanelHeader
-        label="原始简历"
-        description="推荐上传 PDF 或 .docx；解析失败时也可以直接粘贴文本。"
-        accent="coral"
-      />
-
-      <div className="mt-4 rounded-lg border border-dashed border-coral/40 bg-[#fff6f2] p-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm leading-6 text-muted">
-            支持 PDF、.docx，文件不超过 8MB。上传后作为简历来源使用，不把全文展开到文本框。
-          </p>
-          <label className="inline-flex h-10 cursor-pointer items-center justify-center rounded-lg bg-coral px-4 text-sm font-bold text-white shadow-button transition hover:-translate-y-0.5">
-            {isExtracting ? "解析中..." : uploadedResume ? "重新上传" : "上传文件"}
-            <input
-              type="file"
-              accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-              disabled={isExtracting}
-              onChange={onFileChange}
-              className="sr-only"
-            />
-          </label>
-        </div>
-
-        {uploadedResume ? (
-          <div className="mt-3 flex flex-col gap-3 rounded-lg border border-coral/20 bg-white px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-sm font-bold text-ink">{uploadedResume.fileName}</p>
-              <p className="mt-1 text-xs text-muted">
-                已读取约 {uploadedResume.text.length} 个字符，可直接用于优化。
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={onRemoveFile}
-              className="h-9 rounded-md border border-line px-3 text-sm font-semibold text-muted transition hover:border-red-300 hover:text-red-700"
-            >
-              移除文件
-            </button>
-          </div>
-        ) : null}
-      </div>
-
-      <label className="mt-4 block">
-        <span className="text-sm font-bold text-ink">手动粘贴或补充</span>
-        <textarea
-          value={value}
-          onChange={(event) => onTextChange(event.target.value)}
-          placeholder={resumePlaceholder}
-          className="mt-2 min-h-[260px] w-full resize-y rounded-lg border border-line bg-white p-4 text-sm leading-6 text-ink outline-none transition placeholder:text-slate-400 focus:border-coral focus:ring-4 focus:ring-coral/15"
-        />
-      </label>
-    </section>
-  );
-}
-
-function TextInputPanel({
-  label,
-  description,
-  value,
-  onChange,
-  placeholder
-}: {
-  label: string;
-  description: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder: string;
-}) {
-  return (
-    <section className="rounded-lg border border-white bg-white p-4 shadow-pop">
-      <PanelHeader label={label} description={description} accent="sky" />
-      <textarea
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        className="mt-4 min-h-[370px] w-full resize-y rounded-lg border border-line bg-white p-4 text-sm leading-6 text-ink outline-none transition placeholder:text-slate-400 focus:border-sky focus:ring-4 focus:ring-sky/15"
-      />
-    </section>
-  );
-}
-
-function PanelHeader({
-  label,
-  description,
-  accent
-}: {
-  label: string;
-  description: string;
-  accent: "coral" | "sky" | "violet";
-}) {
-  const accentClass = {
-    coral: "bg-coral",
-    sky: "bg-sky",
-    violet: "bg-violet"
-  }[accent];
-
-  return (
-    <div className="flex gap-3">
-      <span className={`mt-1 h-9 w-2 rounded-full ${accentClass}`} />
-      <div>
-        <h2 className="text-lg font-black text-ink">{label}</h2>
-        <p className="mt-1 text-sm leading-6 text-muted">{description}</p>
-      </div>
-    </div>
-  );
-}
-
-function EmptyResult() {
-  return (
-    <div className="rounded-lg border border-dashed border-sky/40 bg-white/80 px-5 py-10 text-center shadow-soft">
-      <p className="text-base font-black text-ink">结果会出现在这里</p>
-      <p className="mt-2 text-sm text-muted">上传或粘贴简历，并填写 JD 后点击开始优化。</p>
-    </div>
-  );
-}
-
-function ResultView({ result }: { result: OptimizationResult }) {
-  return (
-    <div className="space-y-5">
-      <div className="grid gap-4 lg:grid-cols-3">
-        <InfoBlock title="JD 关键词" items={result.jd_keywords} accent="sky" />
-        <InfoBlock title="匹配点" items={result.matched_points} accent="mint" />
-        <InfoBlock title="待补强" items={result.missing_points} accent="lemon" />
-      </div>
-
-      <section className="overflow-hidden rounded-lg border border-white bg-white shadow-pop">
-        <div className="flex flex-col gap-2 border-b border-line px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-lg font-black text-ink">项目经历优化对比</h2>
-            <p className="mt-1 text-sm text-muted">只展示项目、竞赛、校园实践等经历 bullet，不处理个人信息和教育背景。</p>
-          </div>
-          <span className="rounded-full bg-violet/10 px-3 py-1 text-xs font-bold text-violet">
-            {result.revised_bullets.length} 条建议
-          </span>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] border-collapse text-left text-sm">
-            <thead className="bg-[#f8fbff] text-muted">
-              <tr>
-                <th className="w-[26%] border-b border-line px-4 py-3 font-bold">原始 bullet</th>
-                <th className="w-[32%] border-b border-line px-4 py-3 font-bold">优化后 bullet</th>
-                <th className="w-[28%] border-b border-line px-4 py-3 font-bold">修改原因</th>
-                <th className="w-[14%] border-b border-line px-4 py-3 font-bold">需确认</th>
-              </tr>
-            </thead>
-            <tbody>
-              {result.revised_bullets.map((bullet, index) => (
-                <tr key={`${bullet.original}-${index}`} className="align-top transition hover:bg-[#fffaf0]">
-                  <td className="border-b border-line px-4 py-4 leading-6 text-ink">{bullet.original}</td>
-                  <td className="border-b border-line px-4 py-4 leading-6 text-ink">{bullet.revised}</td>
-                  <td className="border-b border-line px-4 py-4 leading-6 text-muted">{bullet.reason}</td>
-                  <td className="border-b border-line px-4 py-4">
-                    <span
-                      className={`rounded-full px-3 py-1 text-xs font-bold ${
-                        bullet.needs_user_confirmation
-                          ? "bg-lemon text-[#775e00]"
-                          : "bg-mint text-[#086b5c]"
-                      }`}
-                    >
-                      {bullet.needs_user_confirmation ? "需要" : "已足够"}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <FollowUpChat
-        key={result.revised_bullets.map((bullet) => bullet.original).join("|")}
-        result={result}
-      />
-    </div>
-  );
-}
-
-function FollowUpChat({ result }: { result: OptimizationResult }) {
-  const [messages, setMessages] = useState<ChatMessage[]>(() => [
-    {
-      role: "assistant",
-      content:
-        result.follow_up_questions[0] ??
-        "我会围绕项目经历继续追问具体职责、行动过程和结果数据，避免写入未经确认的信息。"
-    }
-  ]);
-  const [draft, setDraft] = useState("");
-  const [nextQuestionIndex, setNextQuestionIndex] = useState(1);
-  const [isSending, setIsSending] = useState(false);
-  const [chatError, setChatError] = useState("");
-
-  async function handleChatSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const content = draft.trim();
-
-    if (!content || isSending) {
-      return;
-    }
-
-    const userMessage: ChatMessage = { role: "user", content };
-    const nextMessages = [...messages, userMessage];
-    const nextQuestion = result.follow_up_questions[nextQuestionIndex];
-
-    setMessages(nextMessages);
-    setDraft("");
-    setChatError("");
-    setIsSending(true);
-
-    try {
-      const response = await fetch("/api/follow-up-chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: nextMessages,
-          result,
-          nextQuestion
-        })
-      });
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error ?? "对话生成失败，请稍后重试。");
+      if (lowerName.endsWith(".doc") && !lowerName.endsWith(".docx")) {
+        var docMessage = "暂不支持旧版 .doc 文件，请另存为 .docx 或 PDF 后上传。";
+        setUploadStatus("error", "解析失败：" + docMessage);
+        setError(docMessage);
+        return;
       }
 
-      setMessages((currentMessages) => [
-        ...currentMessages,
-        {
-          role: "assistant",
-          content: data.message
+      setError("");
+      setUploadStatus("extracting", "正在解析「" + file.name + "」...");
+
+      try {
+        var formData = new FormData();
+        formData.append("file", file);
+        var response = await fetch("/api/extract-resume", { method: "POST", body: formData });
+        var data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || "文件解析失败，请换一个文件重试。");
         }
-      ]);
-
-      if (nextQuestion) {
-        setNextQuestionIndex((index) => index + 1);
+        resumeTextarea.value = data.text || "";
+        resumeTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+        setUploadStatus("success", "解析成功：已读取约 " + resumeTextarea.value.length + " 个字符，并已填入下方文本框。");
+        updateSubmitState();
+      } catch (error) {
+        var message = error instanceof Error ? error.message : "文件解析失败，请换一个文件重试。";
+        setUploadStatus("error", "解析失败：" + message);
+        setError(message);
       }
-    } catch (error) {
-      setChatError(error instanceof Error ? error.message : "对话生成失败，请稍后重试。");
-    } finally {
-      setIsSending(false);
     }
+
+    fileInput.addEventListener(
+      "change",
+      function (event) {
+        event.stopImmediatePropagation();
+        extractFile(fileInput.files && fileInput.files[0]);
+      },
+      true
+    );
+
+    resumeTextarea.addEventListener("input", updateSubmitState);
+    jdTextarea.addEventListener("input", updateSubmitState);
+
+    form.addEventListener(
+      "submit",
+      async function (event) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        var resumeText = resumeTextarea.value.trim();
+        var jdText = jdTextarea.value.trim();
+        if (!resumeText || !jdText) {
+          setError(!resumeText ? "请先上传/粘贴简历文本。" : "请先填写目标岗位 JD。");
+          updateSubmitState();
+          return;
+        }
+
+        setError("");
+        submitButton.disabled = true;
+        submitButton.textContent = "正在优化...";
+        try {
+          var response = await fetch("/api/optimize", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ resumeText: resumeText, jdText: jdText })
+          });
+          var data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.error || "请求失败，请稍后重试。");
+          }
+          renderResult(data);
+        } catch (error) {
+          setError(error instanceof Error ? error.message : "请求失败，请稍后重试。");
+        } finally {
+          submitButton.disabled = false;
+          submitButton.textContent = "开始优化";
+          updateSubmitState();
+        }
+      },
+      true
+    );
+
+    updateSubmitState();
   }
 
-  return (
-    <section className="rounded-lg border border-white bg-white p-4 shadow-pop">
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h2 className="text-lg font-black text-ink">追问补充对话</h2>
-          <p className="mt-1 text-sm leading-6 text-muted">
-            像聊天一样补充项目细节，后续接入真实 AI 后可实时迭代改写。
-          </p>
-        </div>
-        <span className="rounded-full bg-sky/10 px-3 py-1 text-xs font-bold text-sky">
-          {messages.length} 条消息
-        </span>
-      </div>
-
-      <div className="mt-4 max-h-[360px] space-y-3 overflow-y-auto rounded-lg border border-line bg-[#f8fbff] p-3">
-        {messages.map((message, index) => (
-          <div
-            key={`${message.role}-${index}-${message.content.slice(0, 12)}`}
-            className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-          >
-            <div
-              className={`max-w-[82%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm leading-6 shadow-sm ${
-                message.role === "user"
-                  ? "bg-ink text-white"
-                  : "border border-sky/20 bg-white text-ink"
-              }`}
-            >
-              {message.content}
-            </div>
-          </div>
-        ))}
-        {isSending ? (
-          <div className="flex justify-start">
-            <div className="rounded-lg border border-sky/20 bg-white px-3 py-2 text-sm text-muted">
-              正在继续追问...
-            </div>
-          </div>
-        ) : null}
-      </div>
-
-      {chatError ? (
-        <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {chatError}
-        </div>
-      ) : null}
-
-      <form onSubmit={handleChatSubmit} className="mt-3 flex flex-col gap-3 sm:flex-row">
-        <input
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          placeholder="直接回答上面的问题，例如：我主要负责延迟初始化和工具函数封装..."
-          className="h-11 flex-1 rounded-lg border border-line bg-white px-3 text-sm text-ink outline-none transition placeholder:text-slate-400 focus:border-sky focus:ring-4 focus:ring-sky/15"
-        />
-        <button
-          type="submit"
-          disabled={!draft.trim() || isSending}
-          className="h-11 rounded-lg bg-sky px-5 text-sm font-bold text-white shadow-button transition hover:-translate-y-0.5 disabled:translate-y-0 disabled:cursor-not-allowed disabled:bg-slate-300"
-        >
-          发送
-        </button>
-      </form>
-    </section>
-  );
-}
-
-function InfoBlock({
-  title,
-  items,
-  accent
-}: {
-  title: string;
-  items: string[];
-  accent: "sky" | "mint" | "lemon";
-}) {
-  const bulletClass = {
-    sky: "bg-sky",
-    mint: "bg-[#13b99a]",
-    lemon: "bg-[#f5c542]"
-  }[accent];
-
-  return (
-    <section className="rounded-lg border border-white bg-white p-4 shadow-pop">
-      <h2 className="text-base font-black text-ink">{title}</h2>
-      <ul className="mt-3 space-y-2 text-sm leading-6 text-muted">
-        {items.map((item, index) => (
-          <li key={`${item}-${index}`} className="flex gap-2">
-            <span className={`mt-2 h-2 w-2 flex-none rounded-full ${bulletClass}`} />
-            <span>{item}</span>
-          </li>
-        ))}
-      </ul>
-    </section>
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bindWorkspace);
+  } else {
+    bindWorkspace();
+  }
+})();
+`
+      }}
+    />
   );
 }

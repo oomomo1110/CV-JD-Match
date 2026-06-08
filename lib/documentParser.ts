@@ -1,7 +1,6 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import mammoth from "mammoth";
-import { PDFParse } from "pdf-parse";
 import PDFParser from "pdf2json";
 
 export type SupportedResumeFile = {
@@ -39,21 +38,25 @@ export async function extractResumeText(file: SupportedResumeFile): Promise<stri
 }
 
 async function extractPdfTextWithPdfParse(buffer: Buffer): Promise<string> {
-  PDFParse.setWorker(
-    pathToFileURL(
-      path.join(process.cwd(), "node_modules", "pdf-parse", "dist", "pdf-parse", "esm", "pdf.worker.mjs")
-    ).toString()
-  );
-
-  const parser = new PDFParse({ data: buffer });
-
   try {
-    const parsed = await parser.getText();
-    return normalizeExtractedText(parsed.text);
+    const { PDFParse } = await import("pdf-parse");
+
+    PDFParse.setWorker(
+      pathToFileURL(
+        path.join(process.cwd(), "node_modules", "pdf-parse", "dist", "pdf-parse", "esm", "pdf.worker.mjs")
+      ).toString()
+    );
+
+    const parser = new PDFParse({ data: buffer });
+
+    try {
+      const parsed = await parser.getText();
+      return normalizeExtractedText(parsed.text);
+    } finally {
+      await parser.destroy();
+    }
   } catch {
     return "";
-  } finally {
-    await parser.destroy();
   }
 }
 
@@ -86,9 +89,19 @@ function extractPdfTextWithPdf2Json(buffer: Buffer): Promise<string> {
 
 export function hasMeaningfulResumeText(text: string): boolean {
   const compactText = text.replace(/\s/g, "");
+  const noiseOnlyText = compactText
+    .replace(/[-–—_]/g, "")
+    .replace(/page/gi, "")
+    .replace(/break/gi, "")
+    .replace(/\d+/g, "");
+
+  if (!noiseOnlyText) {
+    return false;
+  }
+
   const lettersOrNumbers = compactText.match(/[\p{L}\p{N}]/gu) ?? [];
 
-  return lettersOrNumbers.length >= 6;
+  return lettersOrNumbers.length >= 12;
 }
 
 function normalizeExtractedText(text: string): string {
