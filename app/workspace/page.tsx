@@ -102,8 +102,7 @@ function WorkspaceFallbackScript() {
       );
     }
 
-    function renderResult(result) {
-      var bullets = Array.isArray(result.revised_bullets) ? result.revised_bullets : [];
+    function renderBulletTable(bullets, emptyText) {
       var rows = bullets.length
         ? bullets
             .map(function (bullet) {
@@ -120,7 +119,127 @@ function WorkspaceFallbackScript() {
               );
             })
             .join("")
-        : '<tr><td colspan="4" class="border-b border-line px-4 py-4 text-sm leading-6 text-muted">当前 mock 逻辑没有识别到可改写的经历 bullet，请补充项目/实习/校园经历后重试。</td></tr>';
+        : '<tr><td colspan="4" class="border-b border-line px-4 py-4 text-sm leading-6 text-muted">' + escapeHtml(emptyText) + "</td></tr>";
+
+      return (
+        '<div class="overflow-x-auto"><table class="w-full min-w-[900px] border-collapse text-left text-sm">' +
+        '<thead class="bg-[#f8fbff] text-muted"><tr><th class="w-[26%] border-b border-line px-4 py-3 font-bold">原始 bullet</th><th class="w-[32%] border-b border-line px-4 py-3 font-bold">优化后 bullet</th><th class="w-[28%] border-b border-line px-4 py-3 font-bold">修改原因</th><th class="w-[14%] border-b border-line px-4 py-3 font-bold">需确认</th></tr></thead>' +
+        "<tbody>" + rows + "</tbody></table></div>"
+      );
+    }
+
+    function renderRefinedResult(result) {
+      var bullets = Array.isArray(result.revised_bullets) ? result.revised_bullets : [];
+      return (
+        '<section data-refined-result class="mt-5 overflow-hidden rounded-lg border border-sky/20 bg-white shadow-soft">' +
+        '<div class="border-b border-line px-4 py-4"><h3 class="text-base font-black text-ink">根据补充信息生成的优化版本</h3>' +
+        '<p class="mt-1 text-sm leading-6 text-muted">保留首次结果，并单独展示吸收补充回答后的二次优化建议。</p></div>' +
+        renderBulletTable(bullets, "暂无可展示的二次优化 bullet。") +
+        "</section>"
+      );
+    }
+
+    function bindFollowUpForm(result, resumeText, jdText) {
+      var followUpForm = resultRoot.querySelector("[data-follow-up-form]");
+      var refineError = resultRoot.querySelector("[data-refine-error]");
+      var refinedMount = resultRoot.querySelector("[data-refined-mount]");
+      var refineButton = followUpForm ? followUpForm.querySelector("button[type='submit']") : null;
+
+      if (!followUpForm || !refineButton || !refinedMount) {
+        return;
+      }
+
+      function setRefineError(message) {
+        if (!refineError) {
+          return;
+        }
+        if (!message) {
+          refineError.textContent = "";
+          refineError.classList.add("hidden");
+          return;
+        }
+        refineError.textContent = message;
+        refineError.classList.remove("hidden");
+      }
+
+      function collectAnswers() {
+        return Array.from(followUpForm.querySelectorAll("[data-follow-up-answer]"))
+          .map(function (textarea) {
+            return {
+              question: textarea.getAttribute("data-question") || "",
+              answer: textarea.value.trim()
+            };
+          })
+          .filter(function (item) {
+            return item.answer;
+          });
+      }
+
+      function updateRefineButton() {
+        refineButton.disabled = collectAnswers().length === 0;
+      }
+
+      followUpForm.querySelectorAll("[data-follow-up-answer]").forEach(function (textarea) {
+        textarea.addEventListener("input", updateRefineButton);
+      });
+
+      followUpForm.addEventListener("submit", async function (event) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        var followUpAnswers = collectAnswers();
+
+        if (!followUpAnswers.length) {
+          setRefineError("请先补充至少一个回答。");
+          updateRefineButton();
+          return;
+        }
+
+        setRefineError("");
+        refineButton.disabled = true;
+        refineButton.textContent = "正在根据补充信息继续优化...";
+
+        try {
+          var response = await fetch("/api/refine-optimization", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              resumeText: resumeText,
+              jdText: jdText,
+              optimizationResult: result,
+              followUpAnswers: followUpAnswers
+            })
+          });
+          var data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.error || "根据补充信息继续优化失败，请稍后重试。");
+          }
+          refinedMount.innerHTML = renderRefinedResult(data);
+        } catch (error) {
+          setRefineError(error instanceof Error ? error.message : "根据补充信息继续优化失败，请稍后重试。");
+        } finally {
+          refineButton.textContent = "提交补充信息并继续优化";
+          updateRefineButton();
+        }
+      });
+
+      updateRefineButton();
+    }
+
+    function renderResult(result, resumeText, jdText) {
+      var bullets = Array.isArray(result.revised_bullets) ? result.revised_bullets : [];
+      var questions = Array.isArray(result.follow_up_questions) && result.follow_up_questions.length
+        ? result.follow_up_questions
+        : ["请补充你在这些经历中的具体负责范围、关键行动和可验证结果。"];
+      var questionFields = questions
+        .map(function (question) {
+          return (
+            '<label class="block rounded-lg border border-line bg-[#f8fbff] p-3">' +
+            '<span class="block text-sm font-bold leading-6 text-ink">' + escapeHtml(question) + "</span>" +
+            '<textarea data-follow-up-answer data-question="' + escapeHtml(question) + '" placeholder="请补充你的具体经历，例如你负责的模块、使用的技术、遇到的问题、解决方法和最终结果" class="mt-3 min-h-[110px] w-full resize-y rounded-lg border border-line bg-white p-3 text-sm leading-6 text-ink outline-none transition placeholder:text-slate-400 focus:border-sky focus:ring-4 focus:ring-sky/15"></textarea>' +
+            "</label>"
+          );
+        })
+        .join("");
 
       resultRoot.innerHTML =
         '<div class="space-y-5">' +
@@ -134,13 +253,16 @@ function WorkspaceFallbackScript() {
         '<div><h2 class="text-lg font-black text-ink">项目经历优化对比</h2><p class="mt-1 text-sm text-muted">只展示项目、竞赛、校园实践等经历 bullet，不处理个人信息和教育背景。</p></div>' +
         '<span class="rounded-full bg-violet/10 px-3 py-1 text-xs font-bold text-violet">' + bullets.length + " 条建议</span>" +
         "</div>" +
-        '<div class="overflow-x-auto"><table class="w-full min-w-[900px] border-collapse text-left text-sm">' +
-        '<thead class="bg-[#f8fbff] text-muted"><tr><th class="w-[26%] border-b border-line px-4 py-3 font-bold">原始 bullet</th><th class="w-[32%] border-b border-line px-4 py-3 font-bold">优化后 bullet</th><th class="w-[28%] border-b border-line px-4 py-3 font-bold">修改原因</th><th class="w-[14%] border-b border-line px-4 py-3 font-bold">需确认</th></tr></thead>' +
-        "<tbody>" + rows + "</tbody></table></div></section>" +
-        '<section class="rounded-lg border border-white bg-white p-4 shadow-pop"><h2 class="text-lg font-black text-ink">追问补充对话</h2>' +
-        '<div class="mt-4 rounded-lg border border-line bg-[#f8fbff] p-3 text-sm leading-6 text-ink">' +
-        escapeHtml((result.follow_up_questions || [])[0] || "请继续补充项目职责、行动过程和结果数据。") +
-        "</div></section></div>";
+        renderBulletTable(bullets, "当前 mock 逻辑没有识别到可改写的经历 bullet，请补充项目/实习/校园经历后重试。") +
+        "</section>" +
+        '<section data-follow-up-section class="rounded-lg border border-white bg-white p-4 shadow-pop">' +
+        '<div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between"><div><h2 class="text-lg font-black text-ink">追问补充对话</h2>' +
+        '<p class="mt-1 text-sm leading-6 text-muted">逐条回答关键追问，系统会把你的补充信息传入后端生成二次优化版本。</p></div></div>' +
+        '<form data-follow-up-form class="mt-4 space-y-4">' + questionFields +
+        '<div data-refine-error class="hidden rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"></div>' +
+        '<button type="submit" class="h-11 rounded-lg bg-sky px-5 text-sm font-bold text-white shadow-button transition hover:-translate-y-0.5 disabled:translate-y-0 disabled:cursor-not-allowed disabled:bg-slate-300">提交补充信息并继续优化</button>' +
+        "</form><div data-refined-mount></div></section></div>";
+      bindFollowUpForm(result, resumeText, jdText);
     }
 
     async function extractFile(file) {
@@ -220,7 +342,7 @@ function WorkspaceFallbackScript() {
           if (!response.ok) {
             throw new Error(data.error || "请求失败，请稍后重试。");
           }
-          renderResult(data);
+          renderResult(data, resumeText, jdText);
         } catch (error) {
           setError(error instanceof Error ? error.message : "请求失败，请稍后重试。");
         } finally {

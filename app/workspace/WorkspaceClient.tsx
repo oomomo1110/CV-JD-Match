@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { ChangeEvent, FormEvent, useMemo, useRef, useState } from "react";
-import type { ChatMessage, OptimizationResult } from "@/types/optimization";
+import type { FollowUpAnswer, OptimizationResult } from "@/types/optimization";
 
 type UploadedResume = {
   fileName: string;
@@ -260,7 +260,11 @@ export default function WorkspacePage() {
       </form>
 
       <section data-result-root className="mx-auto max-w-6xl px-5 pb-10 sm:px-8">
-        {result ? <ResultView result={result} /> : <EmptyResult />}
+        {result ? (
+          <ResultView result={result} resumeText={resumeTextForSubmit} jdText={jdText.trim()} />
+        ) : (
+          <EmptyResult />
+        )}
       </section>
     </main>
   );
@@ -432,7 +436,15 @@ function EmptyResult() {
   );
 }
 
-function ResultView({ result }: { result: OptimizationResult }) {
+function ResultView({
+  result,
+  resumeText,
+  jdText
+}: {
+  result: OptimizationResult;
+  resumeText: string;
+  jdText: string;
+}) {
   return (
     <div className="space-y-5">
       <div className="grid gap-4 lg:grid-cols-3">
@@ -485,141 +497,178 @@ function ResultView({ result }: { result: OptimizationResult }) {
         </div>
       </section>
 
-      <FollowUpChat
+      <FollowUpRefinement
         key={result.revised_bullets.map((bullet) => bullet.original).join("|")}
         result={result}
+        resumeText={resumeText}
+        jdText={jdText}
       />
     </div>
   );
 }
 
-function FollowUpChat({ result }: { result: OptimizationResult }) {
-  const [messages, setMessages] = useState<ChatMessage[]>(() => [
-    {
-      role: "assistant",
-      content:
-        result.follow_up_questions[0] ??
-        "我会围绕项目经历继续追问具体职责、行动过程和结果数据，避免写入未经确认的信息。"
-    }
-  ]);
-  const [draft, setDraft] = useState("");
-  const [nextQuestionIndex, setNextQuestionIndex] = useState(1);
-  const [isSending, setIsSending] = useState(false);
-  const [chatError, setChatError] = useState("");
+function FollowUpRefinement({
+  result,
+  resumeText,
+  jdText
+}: {
+  result: OptimizationResult;
+  resumeText: string;
+  jdText: string;
+}) {
+  const questions = result.follow_up_questions.length
+    ? result.follow_up_questions
+    : ["请补充你在这些经历中的具体负责范围、关键行动和可验证结果。"];
+  const [answers, setAnswers] = useState<Record<number, string>>({});
+  const [refinedResult, setRefinedResult] = useState<OptimizationResult | null>(null);
+  const [isRefining, setIsRefining] = useState(false);
+  const [refineError, setRefineError] = useState("");
 
-  async function handleChatSubmit(event: FormEvent<HTMLFormElement>) {
+  const followUpAnswers: FollowUpAnswer[] = questions
+    .map((question, index) => ({
+      question,
+      answer: answers[index]?.trim() ?? ""
+    }))
+    .filter((item) => item.answer);
+
+  async function handleRefineSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const content = draft.trim();
 
-    if (!content || isSending) {
+    if (!followUpAnswers.length || isRefining) {
+      setRefineError("请先补充至少一个回答。");
       return;
     }
 
-    const userMessage: ChatMessage = { role: "user", content };
-    const nextMessages = [...messages, userMessage];
-    const nextQuestion = result.follow_up_questions[nextQuestionIndex];
-
-    setMessages(nextMessages);
-    setDraft("");
-    setChatError("");
-    setIsSending(true);
+    setRefineError("");
+    setIsRefining(true);
 
     try {
-      const response = await fetch("/api/follow-up-chat", {
+      const response = await fetch("/api/refine-optimization", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: nextMessages,
-          result,
-          nextQuestion
+          resumeText,
+          jdText,
+          optimizationResult: result,
+          followUpAnswers
         })
       });
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error ?? "对话生成失败，请稍后重试。");
+        throw new Error(data.error ?? "根据补充信息继续优化失败，请稍后重试。");
       }
 
-      setMessages((currentMessages) => [
-        ...currentMessages,
-        {
-          role: "assistant",
-          content: data.message
-        }
-      ]);
-
-      if (nextQuestion) {
-        setNextQuestionIndex((index) => index + 1);
-      }
+      setRefinedResult(data as OptimizationResult);
     } catch (error) {
-      setChatError(error instanceof Error ? error.message : "对话生成失败，请稍后重试。");
+      setRefineError(error instanceof Error ? error.message : "根据补充信息继续优化失败，请稍后重试。");
     } finally {
-      setIsSending(false);
+      setIsRefining(false);
     }
   }
 
   return (
-    <section className="rounded-lg border border-white bg-white p-4 shadow-pop">
+    <section data-follow-up-section className="rounded-lg border border-white bg-white p-4 shadow-pop">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h2 className="text-lg font-black text-ink">追问补充对话</h2>
           <p className="mt-1 text-sm leading-6 text-muted">
-            像聊天一样补充项目细节，后续接入真实 AI 后可实时迭代改写。
+            逐条回答关键追问，系统会把你的补充信息传入后端生成二次优化版本。
           </p>
         </div>
         <span className="rounded-full bg-sky/10 px-3 py-1 text-xs font-bold text-sky">
-          {messages.length} 条消息
+          {followUpAnswers.length}/{questions.length} 已回答
         </span>
       </div>
 
-      <div className="mt-4 max-h-[360px] space-y-3 overflow-y-auto rounded-lg border border-line bg-[#f8fbff] p-3">
-        {messages.map((message, index) => (
-          <div
-            key={`${message.role}-${index}-${message.content.slice(0, 12)}`}
-            className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-          >
-            <div
-              className={`max-w-[82%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm leading-6 shadow-sm ${
-                message.role === "user"
-                  ? "bg-ink text-white"
-                  : "border border-sky/20 bg-white text-ink"
-              }`}
-            >
-              {message.content}
-            </div>
-          </div>
+      <form data-follow-up-form onSubmit={handleRefineSubmit} className="mt-4 space-y-4">
+        {questions.map((question, index) => (
+          <label key={`${question}-${index}`} className="block rounded-lg border border-line bg-[#f8fbff] p-3">
+            <span className="block text-sm font-bold leading-6 text-ink">{question}</span>
+            <textarea
+              data-follow-up-answer
+              data-question={question}
+              value={answers[index] ?? ""}
+              onChange={(event) =>
+                setAnswers((currentAnswers) => ({
+                  ...currentAnswers,
+                  [index]: event.target.value
+                }))
+              }
+              placeholder="请补充你的具体经历，例如你负责的模块、使用的技术、遇到的问题、解决方法和最终结果"
+              className="mt-3 min-h-[110px] w-full resize-y rounded-lg border border-line bg-white p-3 text-sm leading-6 text-ink outline-none transition placeholder:text-slate-400 focus:border-sky focus:ring-4 focus:ring-sky/15"
+            />
+          </label>
         ))}
-        {isSending ? (
-          <div className="flex justify-start">
-            <div className="rounded-lg border border-sky/20 bg-white px-3 py-2 text-sm text-muted">
-              正在继续追问...
-            </div>
+
+        {refineError ? (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {refineError}
           </div>
         ) : null}
-      </div>
 
-      {chatError ? (
-        <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {chatError}
-        </div>
-      ) : null}
-
-      <form onSubmit={handleChatSubmit} className="mt-3 flex flex-col gap-3 sm:flex-row">
-        <input
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          placeholder="直接回答上面的问题，例如：我主要负责延迟初始化和工具函数封装..."
-          className="h-11 flex-1 rounded-lg border border-line bg-white px-3 text-sm text-ink outline-none transition placeholder:text-slate-400 focus:border-sky focus:ring-4 focus:ring-sky/15"
-        />
         <button
           type="submit"
-          disabled={!draft.trim() || isSending}
+          disabled={!followUpAnswers.length || isRefining}
           className="h-11 rounded-lg bg-sky px-5 text-sm font-bold text-white shadow-button transition hover:-translate-y-0.5 disabled:translate-y-0 disabled:cursor-not-allowed disabled:bg-slate-300"
         >
-          发送
+          {isRefining ? "正在根据补充信息继续优化..." : "提交补充信息并继续优化"}
         </button>
       </form>
+
+      {refinedResult ? (
+        <section data-refined-result className="mt-5 overflow-hidden rounded-lg border border-sky/20 bg-white shadow-soft">
+          <div className="border-b border-line px-4 py-4">
+            <h3 className="text-base font-black text-ink">根据补充信息生成的优化版本</h3>
+            <p className="mt-1 text-sm leading-6 text-muted">保留首次结果，并单独展示吸收补充回答后的二次优化建议。</p>
+          </div>
+          <BulletTable bullets={refinedResult.revised_bullets} />
+        </section>
+      ) : null}
     </section>
+  );
+}
+
+function BulletTable({ bullets }: { bullets: OptimizationResult["revised_bullets"] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[900px] border-collapse text-left text-sm">
+        <thead className="bg-[#f8fbff] text-muted">
+          <tr>
+            <th className="w-[26%] border-b border-line px-4 py-3 font-bold">原始 bullet</th>
+            <th className="w-[32%] border-b border-line px-4 py-3 font-bold">优化后 bullet</th>
+            <th className="w-[28%] border-b border-line px-4 py-3 font-bold">修改原因</th>
+            <th className="w-[14%] border-b border-line px-4 py-3 font-bold">需确认</th>
+          </tr>
+        </thead>
+        <tbody>
+          {bullets.length ? (
+            bullets.map((bullet, index) => (
+              <tr key={`${bullet.original}-${index}`} className="align-top transition hover:bg-[#fffaf0]">
+                <td className="border-b border-line px-4 py-4 leading-6 text-ink">{bullet.original}</td>
+                <td className="border-b border-line px-4 py-4 leading-6 text-ink">{bullet.revised}</td>
+                <td className="border-b border-line px-4 py-4 leading-6 text-muted">{bullet.reason}</td>
+                <td className="border-b border-line px-4 py-4">
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs font-bold ${
+                      bullet.needs_user_confirmation ? "bg-lemon text-[#775e00]" : "bg-mint text-[#086b5c]"
+                    }`}
+                  >
+                    {bullet.needs_user_confirmation ? "需要" : "已足够"}
+                  </span>
+                </td>
+              </tr>
+            ))
+          ) : (
+            <tr>
+              <td colSpan={4} className="border-b border-line px-4 py-4 leading-6 text-muted">
+                暂无可展示的二次优化 bullet。
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

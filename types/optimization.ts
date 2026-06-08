@@ -18,6 +18,18 @@ export type OptimizeResumeRequest = {
   jdText: string;
 };
 
+export type FollowUpAnswer = {
+  question: string;
+  answer: string;
+};
+
+export type RefineOptimizationRequest = {
+  resumeText: string;
+  jdText: string;
+  optimizationResult: OptimizationResult;
+  followUpAnswers: FollowUpAnswer[];
+};
+
 export type ChatMessage = {
   role: "assistant" | "user";
   content: string;

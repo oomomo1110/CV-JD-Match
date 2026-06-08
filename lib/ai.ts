@@ -1,5 +1,6 @@
 import type {
   ChatMessage,
+  FollowUpAnswer,
   FollowUpChatResponse,
   OptimizationResult
 } from "@/types/optimization";
@@ -13,6 +14,13 @@ type FollowUpInput = {
   messages: ChatMessage[];
   result: OptimizationResult;
   nextQuestion?: string;
+};
+
+type RefineOptimizationInput = {
+  resumeText: string;
+  jdText: string;
+  optimizationResult: OptimizationResult;
+  followUpAnswers: FollowUpAnswer[];
 };
 
 type ExperienceCandidate = {
@@ -90,6 +98,20 @@ export async function answerFollowUp(input: FollowUpInput): Promise<FollowUpChat
   return JSON.parse(content) as FollowUpChatResponse;
 }
 
+export async function refineOptimizationWithFollowUp(input: RefineOptimizationInput): Promise<OptimizationResult> {
+  const validAnswers = input.followUpAnswers.filter((item) => item.answer.trim());
+
+  if (!validAnswers.length) {
+    throw new Error("请先补充至少一个追问回答。");
+  }
+
+  if (!process.env.AI_API_KEY || !process.env.AI_API_ENDPOINT) {
+    return mockRefineOptimization(input);
+  }
+
+  return callRealRefinementModel(input);
+}
+
 async function callRealModel(input: OptimizeInput): Promise<OptimizationResult> {
   const endpoint = process.env.AI_API_ENDPOINT;
   const model = process.env.AI_MODEL_NAME ?? "replace-with-your-model";
@@ -148,6 +170,67 @@ async function callRealModel(input: OptimizeInput): Promise<OptimizationResult> 
   return JSON.parse(content) as OptimizationResult;
 }
 
+async function callRealRefinementModel(input: RefineOptimizationInput): Promise<OptimizationResult> {
+  const endpoint = process.env.AI_API_ENDPOINT;
+  const model = process.env.AI_MODEL_NAME ?? "replace-with-your-model";
+
+  if (!endpoint) {
+    return mockRefineOptimization(input);
+  }
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.AI_API_KEY}`
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        {
+          role: "user",
+          content: JSON.stringify({
+            task: "基于用户对追问问题的回答，对首次简历优化结果做二次优化。严禁编造未提供的信息。",
+            resume: input.resumeText,
+            jd: input.jdText,
+            first_optimization_result: input.optimizationResult,
+            follow_up_answers: input.followUpAnswers,
+            required_schema: {
+              jd_keywords: "string[]",
+              matched_points: "string[]",
+              missing_points: "string[]",
+              revised_bullets: [
+                {
+                  original: "string",
+                  revised: "string",
+                  reason: "string",
+                  needs_user_confirmation: "boolean"
+                }
+              ],
+              follow_up_questions: "string[]"
+            }
+          })
+        }
+      ],
+      response_format: { type: "json_object" }
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`AI provider request failed: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const content = data.choices?.[0]?.message?.content;
+
+  if (!content || typeof content !== "string") {
+    throw new Error("AI provider returned an unsupported response format.");
+  }
+
+  return JSON.parse(content) as OptimizationResult;
+}
+
 function mockOptimizeResume(input: OptimizeInput): OptimizationResult {
   const jdKeywords = pickKeywords(input.jdText);
   const experiences = extractExperienceCandidates(input.resumeText).slice(0, 6);
@@ -169,6 +252,53 @@ function mockOptimizeResume(input: OptimizeInput): OptimizationResult {
     ],
     revised_bullets: revisedBullets,
     follow_up_questions: buildFollowUpQuestions(experiences)
+  };
+}
+
+function mockRefineOptimization(input: RefineOptimizationInput): OptimizationResult {
+  const answerSummary = summarizeFollowUpAnswers(input.followUpAnswers);
+  const answerKeywords = pickKeywords(answerSummary);
+  const jdKeywords = Array.from(new Set([...input.optimizationResult.jd_keywords, ...answerKeywords])).slice(0, 8);
+  const fallbackBullets = extractExperienceCandidates(input.resumeText).slice(0, 4);
+  const sourceBullets = input.optimizationResult.revised_bullets.length
+    ? input.optimizationResult.revised_bullets
+    : fallbackBullets.map((experience) => ({
+        original: formatOriginalExperience(experience),
+        revised: buildRevisedBullet(experience, jdKeywords),
+        reason: buildReason(experience),
+        needs_user_confirmation: !hasSpecificOutcome(experience.bullet)
+      }));
+
+  const revisedBullets = sourceBullets.map((bullet, index) => {
+    const relatedAnswer = input.followUpAnswers.find((item) => item.answer.trim())?.answer.trim() ?? "";
+    const answerSignal = relatedAnswer ? normalizeAnswerSnippet(relatedAnswer) : "";
+    const revised = answerSignal
+      ? `${bullet.revised.replace(/[。；;]$/, "")}；结合补充信息，进一步突出：${answerSignal}。`
+      : bullet.revised;
+
+    return {
+      original: bullet.original,
+      revised,
+      reason:
+        index === 0 && answerSignal
+          ? "在首次优化基础上吸收用户补充的真实负责范围、行动细节或结果信息；未补充的数据仍不编造。"
+          : "保留首次优化结构，并根据用户已补充信息调整表达边界；缺失量化结果时仍需继续确认。",
+      needs_user_confirmation: !hasSpecificOutcome(revised) || /建议补充|继续确认|未补充/.test(revised)
+    };
+  });
+
+  return {
+    jd_keywords: jdKeywords,
+    matched_points: [
+      "已将用户补充回答纳入二次优化，优先强化真实负责范围、关键行动和可验证结果。",
+      ...input.optimizationResult.matched_points.slice(0, 2)
+    ],
+    missing_points: [
+      "如果补充回答中仍没有明确数据，二次优化不会自动编造量化结果。",
+      "建议继续确认每段经历中的个人贡献边界、使用工具、难点解决过程和最终影响。"
+    ],
+    revised_bullets: revisedBullets,
+    follow_up_questions: buildSecondRoundQuestions(input.followUpAnswers)
   };
 }
 
@@ -378,6 +508,32 @@ function buildFollowUpQuestions(experiences: ExperienceCandidate[]): string[] {
       : "这些项目/实践经历中，你独立负责的部分和参与支持的部分分别是什么？",
     "每个项目有没有可确认的结果数据，例如性能指标、功能数量、测试覆盖、用户反馈、交付周期或排名？",
     "针对目标 JD，你希望优先突出工程实现能力、算法/数据分析能力、沟通协作能力，还是项目推进能力？"
+  ];
+}
+
+function summarizeFollowUpAnswers(answers: FollowUpAnswer[]): string {
+  return answers
+    .map((item) => item.answer.trim())
+    .filter(Boolean)
+    .join("；");
+}
+
+function normalizeAnswerSnippet(answer: string): string {
+  return answer
+    .replace(/\s+/g, " ")
+    .replace(/[。；;]$/, "")
+    .slice(0, 90);
+}
+
+function buildSecondRoundQuestions(answers: FollowUpAnswer[]): string[] {
+  const answeredText = summarizeFollowUpAnswers(answers);
+
+  return [
+    /(\d|%|秒|分钟|小时|天|周|月|个|项|次|人)/.test(answeredText)
+      ? "这些数据是否都可以在面试中解释来源和计算方式？"
+      : "这段经历是否有可以确认的量化结果，例如性能、数量、效率、准确率、用户反馈或交付周期？",
+    "补充回答中提到的工作，是你独立负责、主导推进，还是在队友指导下完成？",
+    "哪些技术细节可以安全写进简历，哪些只适合面试时展开说明？"
   ];
 }
 
