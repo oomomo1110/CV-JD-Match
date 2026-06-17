@@ -39,6 +39,11 @@ function WorkspaceFallbackScript() {
     var errorBox = document.querySelector("[data-error-box]");
     var resultRoot = document.querySelector("[data-result-root]");
     var submitButton = form ? form.querySelector("button[type='submit']") : null;
+    var clearDraftButton = document.querySelector("[data-clear-draft]");
+    var draftKey = "cv-jd-match-workspace-draft-v1";
+    var currentOptimizationResult = null;
+    var currentSecondOptimizationResult = null;
+    var currentStep = "input";
 
     if (!form || !fileInput || !resumeTextarea || !jdTextarea || !submitButton || !resultRoot) {
       window.setTimeout(bindWorkspace, 300);
@@ -85,6 +90,108 @@ function WorkspaceFallbackScript() {
       submitButton.className =
         "h-12 rounded-lg px-6 text-sm font-bold text-white shadow-button transition hover:-translate-y-0.5 disabled:translate-y-0 disabled:cursor-not-allowed disabled:bg-slate-300 " +
         (ready ? "bg-ink hover:bg-[#0f172a]" : "bg-slate-400 hover:bg-slate-500");
+    }
+
+    function renderEmptyResult() {
+      return (
+        '<div class="rounded-lg border border-dashed border-sky/40 bg-white/80 px-5 py-10 text-center shadow-soft">' +
+        '<p class="text-base font-black text-ink">结果会出现在这里</p>' +
+        '<p class="mt-2 text-sm text-muted">上传或粘贴简历，并填写 JD 后点击开始优化。</p>' +
+        "</div>"
+      );
+    }
+
+    function collectVisibleFollowUpAnswers() {
+      var followUpForm = resultRoot.querySelector("[data-follow-up-form]");
+      if (!followUpForm) {
+        return [];
+      }
+      return Array.from(followUpForm.querySelectorAll("[data-follow-up-answer]"))
+        .map(function (textarea) {
+          return {
+            question: textarea.getAttribute("data-question") || "",
+            answer: textarea.value.trim()
+          };
+        })
+        .filter(function (item) {
+          return item.question && item.answer;
+        });
+    }
+
+    function saveDraft() {
+      try {
+        window.localStorage.setItem(
+          draftKey,
+          JSON.stringify({
+            resumeText: resumeTextarea.value,
+            jdText: jdTextarea.value,
+            uploadedFileName: selectedFile ? selectedFile.getAttribute("data-uploaded-file-name") || "" : "",
+            optimizationResult: currentOptimizationResult,
+            followUpAnswers: collectVisibleFollowUpAnswers(),
+            secondOptimizationResult: currentSecondOptimizationResult,
+            currentStep: currentStep
+          })
+        );
+      } catch (error) {
+        // localStorage may be unavailable in some browser privacy modes.
+      }
+    }
+
+    function restoreDraft() {
+      try {
+        var rawDraft = window.localStorage.getItem(draftKey);
+        if (!rawDraft) {
+          return;
+        }
+
+        var draft = JSON.parse(rawDraft);
+        var uploadedFileName = typeof draft.uploadedFileName === "string" ? draft.uploadedFileName : "";
+        resumeTextarea.value = typeof draft.resumeText === "string" ? draft.resumeText : "";
+        jdTextarea.value = typeof draft.jdText === "string" ? draft.jdText : "";
+        currentOptimizationResult = draft.optimizationResult || null;
+        currentSecondOptimizationResult = draft.secondOptimizationResult || null;
+        currentStep = currentSecondOptimizationResult ? "refined" : currentOptimizationResult ? "optimized" : draft.currentStep || "input";
+
+        if (selectedFile && uploadedFileName) {
+          selectedFile.textContent = "已选择：" + uploadedFileName;
+          selectedFile.setAttribute("data-uploaded-file-name", uploadedFileName);
+          if (resumeTextarea.value.trim()) {
+            setUploadStatus("success", "已从本地草稿恢复文件「" + uploadedFileName + "」及解析文本。");
+          }
+        }
+
+        if (currentOptimizationResult) {
+          renderResult(
+            currentOptimizationResult,
+            resumeTextarea.value.trim(),
+            jdTextarea.value.trim(),
+            Array.isArray(draft.followUpAnswers) ? draft.followUpAnswers : [],
+            currentSecondOptimizationResult
+          );
+        }
+
+        updateSubmitState();
+      } catch (error) {
+        window.localStorage.removeItem(draftKey);
+      }
+    }
+
+    function clearDraft() {
+      window.localStorage.removeItem(draftKey);
+      resumeTextarea.value = "";
+      jdTextarea.value = "";
+      fileInput.value = "";
+      currentOptimizationResult = null;
+      currentSecondOptimizationResult = null;
+      currentStep = "input";
+      if (selectedFile) {
+        selectedFile.textContent = "选择 PDF 或 .docx 后会自动解析，并填入下方文本框。";
+        selectedFile.removeAttribute("data-uploaded-file-name");
+      }
+      setError("");
+      setUploadStatus("", "");
+      resultRoot.innerHTML = renderEmptyResult();
+      updateSubmitState();
     }
 
     function renderList(title, items, dotClass) {
@@ -180,7 +287,15 @@ function WorkspaceFallbackScript() {
       }
 
       followUpForm.querySelectorAll("[data-follow-up-answer]").forEach(function (textarea) {
-        textarea.addEventListener("input", updateRefineButton);
+        textarea.addEventListener("input", function () {
+          currentSecondOptimizationResult = null;
+          currentStep = "optimized";
+          if (refinedMount) {
+            refinedMount.innerHTML = "";
+          }
+          updateRefineButton();
+          saveDraft();
+        });
       });
 
       followUpForm.addEventListener("submit", async function (event) {
@@ -213,7 +328,10 @@ function WorkspaceFallbackScript() {
           if (!response.ok) {
             throw new Error(data.error || "根据补充信息继续优化失败，请稍后重试。");
           }
+          currentSecondOptimizationResult = data;
+          currentStep = "refined";
           refinedMount.innerHTML = renderRefinedResult(data);
+          saveDraft();
         } catch (error) {
           setRefineError(error instanceof Error ? error.message : "根据补充信息继续优化失败，请稍后重试。");
         } finally {
@@ -225,17 +343,25 @@ function WorkspaceFallbackScript() {
       updateRefineButton();
     }
 
-    function renderResult(result, resumeText, jdText) {
+    function renderResult(result, resumeText, jdText, savedFollowUpAnswers, savedSecondResult) {
       var bullets = Array.isArray(result.revised_bullets) ? result.revised_bullets : [];
       var questions = Array.isArray(result.follow_up_questions) && result.follow_up_questions.length
         ? result.follow_up_questions
         : ["请补充你在这些经历中的具体负责范围、关键行动和可验证结果。"];
+      var savedAnswerMap = {};
+      (Array.isArray(savedFollowUpAnswers) ? savedFollowUpAnswers : []).forEach(function (item) {
+        if (item && item.question && item.answer) {
+          savedAnswerMap[item.question] = item.answer;
+        }
+      });
       var questionFields = questions
         .map(function (question) {
           return (
             '<label class="block rounded-lg border border-line bg-[#f8fbff] p-3">' +
             '<span class="block text-sm font-bold leading-6 text-ink">' + escapeHtml(question) + "</span>" +
-            '<textarea data-follow-up-answer data-question="' + escapeHtml(question) + '" placeholder="请补充你的具体经历，例如你负责的模块、使用的技术、遇到的问题、解决方法和最终结果" class="mt-3 min-h-[110px] w-full resize-y rounded-lg border border-line bg-white p-3 text-sm leading-6 text-ink outline-none transition placeholder:text-slate-400 focus:border-sky focus:ring-4 focus:ring-sky/15"></textarea>' +
+            '<textarea data-follow-up-answer data-question="' + escapeHtml(question) + '" placeholder="请补充你的具体经历，例如你负责的模块、使用的技术、遇到的问题、解决方法和最终结果" class="mt-3 min-h-[110px] w-full resize-y rounded-lg border border-line bg-white p-3 text-sm leading-6 text-ink outline-none transition placeholder:text-slate-400 focus:border-sky focus:ring-4 focus:ring-sky/15">' +
+            escapeHtml(savedAnswerMap[question] || "") +
+            "</textarea>" +
             "</label>"
           );
         })
@@ -263,6 +389,12 @@ function WorkspaceFallbackScript() {
         '<button type="submit" class="h-11 rounded-lg bg-sky px-5 text-sm font-bold text-white shadow-button transition hover:-translate-y-0.5 disabled:translate-y-0 disabled:cursor-not-allowed disabled:bg-slate-300">提交补充信息并继续优化</button>' +
         "</form><div data-refined-mount></div></section></div>";
       bindFollowUpForm(result, resumeText, jdText);
+      if (savedSecondResult) {
+        var refinedMount = resultRoot.querySelector("[data-refined-mount]");
+        if (refinedMount) {
+          refinedMount.innerHTML = renderRefinedResult(savedSecondResult);
+        }
+      }
     }
 
     async function extractFile(file) {
@@ -273,6 +405,7 @@ function WorkspaceFallbackScript() {
       var lowerName = file.name.toLowerCase();
       if (selectedFile) {
         selectedFile.textContent = "已选择：" + file.name;
+        selectedFile.setAttribute("data-uploaded-file-name", file.name);
       }
 
       if (lowerName.endsWith(".doc") && !lowerName.endsWith(".docx")) {
@@ -296,7 +429,12 @@ function WorkspaceFallbackScript() {
         resumeTextarea.value = data.text || "";
         resumeTextarea.dispatchEvent(new Event("input", { bubbles: true }));
         setUploadStatus("success", "解析成功：已读取约 " + resumeTextarea.value.length + " 个字符，并已填入下方文本框。");
+        currentOptimizationResult = null;
+        currentSecondOptimizationResult = null;
+        currentStep = "input";
+        resultRoot.innerHTML = renderEmptyResult();
         updateSubmitState();
+        saveDraft();
       } catch (error) {
         var message = error instanceof Error ? error.message : "文件解析失败，请换一个文件重试。";
         setUploadStatus("error", "解析失败：" + message);
@@ -313,8 +451,37 @@ function WorkspaceFallbackScript() {
       true
     );
 
-    resumeTextarea.addEventListener("input", updateSubmitState);
-    jdTextarea.addEventListener("input", updateSubmitState);
+    resumeTextarea.addEventListener("input", function () {
+      if (currentOptimizationResult) {
+        currentOptimizationResult = null;
+        currentSecondOptimizationResult = null;
+        resultRoot.innerHTML = renderEmptyResult();
+      }
+      currentStep = "input";
+      updateSubmitState();
+      saveDraft();
+    });
+    jdTextarea.addEventListener("input", function () {
+      if (currentOptimizationResult) {
+        currentOptimizationResult = null;
+        currentSecondOptimizationResult = null;
+        resultRoot.innerHTML = renderEmptyResult();
+      }
+      currentStep = "input";
+      updateSubmitState();
+      saveDraft();
+    });
+
+    if (clearDraftButton) {
+      clearDraftButton.addEventListener(
+        "click",
+        function (event) {
+          event.preventDefault();
+          clearDraft();
+        },
+        true
+      );
+    }
 
     form.addEventListener(
       "submit",
@@ -342,7 +509,11 @@ function WorkspaceFallbackScript() {
           if (!response.ok) {
             throw new Error(data.error || "请求失败，请稍后重试。");
           }
+          currentOptimizationResult = data;
+          currentSecondOptimizationResult = null;
+          currentStep = "optimized";
           renderResult(data, resumeText, jdText);
+          saveDraft();
         } catch (error) {
           setError(error instanceof Error ? error.message : "请求失败，请稍后重试。");
         } finally {
@@ -354,6 +525,7 @@ function WorkspaceFallbackScript() {
       true
     );
 
+    restoreDraft();
     updateSubmitState();
   }
 

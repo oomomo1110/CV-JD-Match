@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ChangeEvent, FormEvent, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { FollowUpAnswer, OptimizationResult } from "@/types/optimization";
 
 type UploadedResume = {
@@ -10,6 +10,20 @@ type UploadedResume = {
 };
 
 type UploadStatus = "idle" | "extracting" | "success" | "error";
+
+type WorkspaceStep = "input" | "optimized" | "refined";
+
+type WorkspaceDraft = {
+  resumeText: string;
+  jdText: string;
+  uploadedFileName: string;
+  optimizationResult: OptimizationResult | null;
+  followUpAnswers: FollowUpAnswer[];
+  secondOptimizationResult: OptimizationResult | null;
+  currentStep: WorkspaceStep;
+};
+
+const workspaceDraftKey = "cv-jd-match-workspace-draft-v1";
 
 const resumePlaceholder = `示例：
 华南某大学 计算机科学与技术 本科
@@ -34,14 +48,110 @@ export default function WorkspacePage() {
   const [uploadedResume, setUploadedResume] = useState<UploadedResume | null>(null);
   const [jdText, setJdText] = useState("");
   const [result, setResult] = useState<OptimizationResult | null>(null);
+  const [followUpAnswerMap, setFollowUpAnswerMap] = useState<Record<string, string>>({});
+  const [secondOptimizationResult, setSecondOptimizationResult] = useState<OptimizationResult | null>(null);
+  const [currentStep, setCurrentStep] = useState<WorkspaceStep>("input");
   const [error, setError] = useState("");
   const [selectedResumeFileName, setSelectedResumeFileName] = useState("");
   const [resumeUploadStatus, setResumeUploadStatus] = useState<UploadStatus>("idle");
   const [resumeUploadError, setResumeUploadError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
+  const [hasRestoredDraft, setHasRestoredDraft] = useState(false);
   const activeFileKeyRef = useRef("");
   const isExtractingRef = useRef(false);
+  const skipNextDraftSaveRef = useRef(false);
+
+  useEffect(() => {
+    const restoreTimer = window.setTimeout(() => {
+      try {
+        const rawDraft = window.localStorage.getItem(workspaceDraftKey);
+        if (!rawDraft) {
+          setHasRestoredDraft(true);
+          return;
+        }
+
+        const draft = JSON.parse(rawDraft) as Partial<WorkspaceDraft>;
+        const restoredResumeText = typeof draft.resumeText === "string" ? draft.resumeText : "";
+        const restoredJdText = typeof draft.jdText === "string" ? draft.jdText : "";
+        const restoredFileName = typeof draft.uploadedFileName === "string" ? draft.uploadedFileName : "";
+        const restoredResult = draft.optimizationResult ?? null;
+        const restoredSecondResult = draft.secondOptimizationResult ?? null;
+        const restoredFollowUpAnswers = Array.isArray(draft.followUpAnswers) ? draft.followUpAnswers : [];
+
+        setResumeText(restoredResumeText);
+        setJdText(restoredJdText);
+        setSelectedResumeFileName(restoredFileName);
+        setUploadedResume(
+          restoredFileName && restoredResumeText
+            ? {
+                fileName: restoredFileName,
+                text: restoredResumeText
+              }
+            : null
+        );
+        setResumeUploadStatus(restoredFileName && restoredResumeText ? "success" : "idle");
+        setResult(restoredResult);
+        setSecondOptimizationResult(restoredSecondResult);
+        setFollowUpAnswerMap(
+          restoredFollowUpAnswers.reduce<Record<string, string>>((answers, item) => {
+            if (item.question && item.answer) {
+              answers[item.question] = item.answer;
+            }
+            return answers;
+          }, {})
+        );
+        setCurrentStep(restoredSecondResult ? "refined" : restoredResult ? "optimized" : draft.currentStep ?? "input");
+      } catch {
+        window.localStorage.removeItem(workspaceDraftKey);
+      } finally {
+        setHasRestoredDraft(true);
+      }
+    }, 0);
+
+    return () => window.clearTimeout(restoreTimer);
+  }, []);
+
+  useEffect(() => {
+    if (!hasRestoredDraft) {
+      return;
+    }
+
+    if (skipNextDraftSaveRef.current) {
+      skipNextDraftSaveRef.current = false;
+      window.localStorage.removeItem(workspaceDraftKey);
+      return;
+    }
+
+    const followUpAnswers = Object.entries(followUpAnswerMap)
+      .map(([question, answer]) => ({
+        question,
+        answer: answer.trim()
+      }))
+      .filter((item) => item.answer);
+    const uploadedFileName = selectedResumeFileName || uploadedResume?.fileName || "";
+    const draft: WorkspaceDraft = {
+      resumeText,
+      jdText,
+      uploadedFileName,
+      optimizationResult: result,
+      followUpAnswers,
+      secondOptimizationResult,
+      currentStep
+    };
+
+    window.localStorage.setItem(workspaceDraftKey, JSON.stringify(draft));
+  }, [
+    currentStep,
+    followUpAnswerMap,
+    hasRestoredDraft,
+    jdText,
+    result,
+    resumeText,
+    secondOptimizationResult,
+    selectedResumeFileName,
+    uploadedResume
+  ]);
 
   const resumeTextForSubmit = useMemo(() => {
     return resumeText.trim();
@@ -129,6 +239,9 @@ export default function WorkspacePage() {
       setResumeText(nextUploadedResume.text);
       setResumeUploadStatus("success");
       setResult(null);
+      setSecondOptimizationResult(null);
+      setFollowUpAnswerMap({});
+      setCurrentStep("input");
     } catch (uploadError) {
       const message = uploadError instanceof Error ? uploadError.message : "文件解析失败，请换一个文件重试。";
       setResumeUploadStatus("error");
@@ -145,6 +258,9 @@ export default function WorkspacePage() {
     event.preventDefault();
     setError("");
     setResult(null);
+    setSecondOptimizationResult(null);
+    setFollowUpAnswerMap({});
+    setCurrentStep("input");
 
     const formData = new FormData(event.currentTarget);
     const formResumeText = formData.get("resumeText")?.toString().trim() ?? "";
@@ -172,11 +288,32 @@ export default function WorkspacePage() {
       }
 
       setResult(data as OptimizationResult);
+      setCurrentStep("optimized");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "请求失败，请稍后重试。");
     } finally {
       setIsLoading(false);
     }
+  }
+
+  function handleClearDraft() {
+    skipNextDraftSaveRef.current = true;
+    window.localStorage.removeItem(workspaceDraftKey);
+    setResumeText("");
+    setUploadedResume(null);
+    setJdText("");
+    setResult(null);
+    setFollowUpAnswerMap({});
+    setSecondOptimizationResult(null);
+    setCurrentStep("input");
+    setError("");
+    setSelectedResumeFileName("");
+    setResumeUploadStatus("idle");
+    setResumeUploadError("");
+    activeFileKeyRef.current = "";
+    isExtractingRef.current = false;
+    setIsExtracting(false);
+    setIsLoading(false);
   }
 
   return (
@@ -213,6 +350,9 @@ export default function WorkspacePage() {
           onTextChange={(value) => {
             setResumeText(value);
             setResult(null);
+            setSecondOptimizationResult(null);
+            setFollowUpAnswerMap({});
+            setCurrentStep("input");
           }}
           onFileChange={handleResumeFileChange}
           onRemoveFile={() => {
@@ -220,13 +360,23 @@ export default function WorkspacePage() {
             setSelectedResumeFileName("");
             setResumeUploadStatus("idle");
             setResumeUploadError("");
+            setResult(null);
+            setSecondOptimizationResult(null);
+            setFollowUpAnswerMap({});
+            setCurrentStep("input");
           }}
         />
         <TextInputPanel
           label="目标岗位 JD"
           description="粘贴岗位职责和要求。系统会围绕 JD 做匹配和结构化优化建议。"
           value={jdText}
-          onChange={setJdText}
+          onChange={(value) => {
+            setJdText(value);
+            setResult(null);
+            setSecondOptimizationResult(null);
+            setFollowUpAnswerMap({});
+            setCurrentStep("input");
+          }}
           placeholder={jdPlaceholder}
         />
 
@@ -245,23 +395,53 @@ export default function WorkspacePage() {
             <p className={`text-sm leading-6 ${canSubmit ? "text-[#086b5c]" : "text-muted"}`}>
               {submitHint}
             </p>
-            <button
-              type="submit"
-              disabled={isLoading || isExtracting}
-              aria-disabled={!canSubmit}
-              className={`h-12 rounded-lg px-6 text-sm font-bold text-white shadow-button transition hover:-translate-y-0.5 disabled:translate-y-0 disabled:cursor-not-allowed disabled:bg-slate-300 ${
-                canSubmit ? "bg-ink hover:bg-[#0f172a]" : "bg-slate-400 hover:bg-slate-500"
-              }`}
-            >
-              {isLoading ? "正在优化..." : "开始优化"}
-            </button>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <button
+                data-clear-draft
+                type="button"
+                onClick={handleClearDraft}
+                className="h-12 rounded-lg border border-line bg-white px-4 text-sm font-bold text-muted transition hover:border-coral hover:text-coral"
+              >
+                清空草稿 / 重新开始
+              </button>
+              <button
+                type="submit"
+                disabled={isLoading || isExtracting}
+                aria-disabled={!canSubmit}
+                className={`h-12 rounded-lg px-6 text-sm font-bold text-white shadow-button transition hover:-translate-y-0.5 disabled:translate-y-0 disabled:cursor-not-allowed disabled:bg-slate-300 ${
+                  canSubmit ? "bg-ink hover:bg-[#0f172a]" : "bg-slate-400 hover:bg-slate-500"
+                }`}
+              >
+                {isLoading ? "正在优化..." : "开始优化"}
+              </button>
+            </div>
           </div>
         </div>
       </form>
 
       <section data-result-root className="mx-auto max-w-6xl px-5 pb-10 sm:px-8">
         {result ? (
-          <ResultView result={result} resumeText={resumeTextForSubmit} jdText={jdText.trim()} />
+          <ResultView
+            result={result}
+            resumeText={resumeTextForSubmit}
+            jdText={jdText.trim()}
+            followUpAnswerMap={followUpAnswerMap}
+            onFollowUpAnswerChange={(question, answer) =>
+              {
+                setFollowUpAnswerMap((answers) => ({
+                  ...answers,
+                  [question]: answer
+                }));
+                setSecondOptimizationResult(null);
+                setCurrentStep("optimized");
+              }
+            }
+            secondOptimizationResult={secondOptimizationResult}
+            onSecondOptimizationResult={(nextResult) => {
+              setSecondOptimizationResult(nextResult);
+              setCurrentStep(nextResult ? "refined" : "optimized");
+            }}
+          />
         ) : (
           <EmptyResult />
         )}
@@ -439,11 +619,19 @@ function EmptyResult() {
 function ResultView({
   result,
   resumeText,
-  jdText
+  jdText,
+  followUpAnswerMap,
+  onFollowUpAnswerChange,
+  secondOptimizationResult,
+  onSecondOptimizationResult
 }: {
   result: OptimizationResult;
   resumeText: string;
   jdText: string;
+  followUpAnswerMap: Record<string, string>;
+  onFollowUpAnswerChange: (question: string, answer: string) => void;
+  secondOptimizationResult: OptimizationResult | null;
+  onSecondOptimizationResult: (result: OptimizationResult | null) => void;
 }) {
   return (
     <div className="space-y-5">
@@ -502,6 +690,10 @@ function ResultView({
         result={result}
         resumeText={resumeText}
         jdText={jdText}
+        followUpAnswerMap={followUpAnswerMap}
+        onFollowUpAnswerChange={onFollowUpAnswerChange}
+        secondOptimizationResult={secondOptimizationResult}
+        onSecondOptimizationResult={onSecondOptimizationResult}
       />
     </div>
   );
@@ -510,24 +702,30 @@ function ResultView({
 function FollowUpRefinement({
   result,
   resumeText,
-  jdText
+  jdText,
+  followUpAnswerMap,
+  onFollowUpAnswerChange,
+  secondOptimizationResult,
+  onSecondOptimizationResult
 }: {
   result: OptimizationResult;
   resumeText: string;
   jdText: string;
+  followUpAnswerMap: Record<string, string>;
+  onFollowUpAnswerChange: (question: string, answer: string) => void;
+  secondOptimizationResult: OptimizationResult | null;
+  onSecondOptimizationResult: (result: OptimizationResult | null) => void;
 }) {
   const questions = result.follow_up_questions.length
     ? result.follow_up_questions
     : ["请补充你在这些经历中的具体负责范围、关键行动和可验证结果。"];
-  const [answers, setAnswers] = useState<Record<number, string>>({});
-  const [refinedResult, setRefinedResult] = useState<OptimizationResult | null>(null);
   const [isRefining, setIsRefining] = useState(false);
   const [refineError, setRefineError] = useState("");
 
   const followUpAnswers: FollowUpAnswer[] = questions
-    .map((question, index) => ({
+    .map((question) => ({
       question,
-      answer: answers[index]?.trim() ?? ""
+      answer: followUpAnswerMap[question]?.trim() ?? ""
     }))
     .filter((item) => item.answer);
 
@@ -559,7 +757,7 @@ function FollowUpRefinement({
         throw new Error(data.error ?? "根据补充信息继续优化失败，请稍后重试。");
       }
 
-      setRefinedResult(data as OptimizationResult);
+      onSecondOptimizationResult(data as OptimizationResult);
     } catch (error) {
       setRefineError(error instanceof Error ? error.message : "根据补充信息继续优化失败，请稍后重试。");
     } finally {
@@ -588,13 +786,8 @@ function FollowUpRefinement({
             <textarea
               data-follow-up-answer
               data-question={question}
-              value={answers[index] ?? ""}
-              onChange={(event) =>
-                setAnswers((currentAnswers) => ({
-                  ...currentAnswers,
-                  [index]: event.target.value
-                }))
-              }
+              value={followUpAnswerMap[question] ?? ""}
+              onChange={(event) => onFollowUpAnswerChange(question, event.target.value)}
               placeholder="请补充你的具体经历，例如你负责的模块、使用的技术、遇到的问题、解决方法和最终结果"
               className="mt-3 min-h-[110px] w-full resize-y rounded-lg border border-line bg-white p-3 text-sm leading-6 text-ink outline-none transition placeholder:text-slate-400 focus:border-sky focus:ring-4 focus:ring-sky/15"
             />
@@ -616,13 +809,13 @@ function FollowUpRefinement({
         </button>
       </form>
 
-      {refinedResult ? (
+      {secondOptimizationResult ? (
         <section data-refined-result className="mt-5 overflow-hidden rounded-lg border border-sky/20 bg-white shadow-soft">
           <div className="border-b border-line px-4 py-4">
             <h3 className="text-base font-black text-ink">根据补充信息生成的优化版本</h3>
             <p className="mt-1 text-sm leading-6 text-muted">保留首次结果，并单独展示吸收补充回答后的二次优化建议。</p>
           </div>
-          <BulletTable bullets={refinedResult.revised_bullets} />
+          <BulletTable bullets={secondOptimizationResult.revised_bullets} />
         </section>
       ) : null}
     </section>
